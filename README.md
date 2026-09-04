@@ -1,0 +1,70 @@
+# Agents Controllers
+
+Панель управления AI-агентами: интерактивные сессии aider + задачи для crewai.
+Go + Vue 3 + TypeScript.
+
+Зачем: держать несколько aider-сессий в разных папках под рукой, запускать
+задачи, где несколько агентов правят код через aider, и видеть логи/статусы
+всех процессов в одном месте.
+
+## Как устроено
+
+- **Агент** — интерактивная сессия `aider`, запущенная в своей рабочей папке
+  (cwd задаётся процессу напрямую). Общение с агентом — через stdin/stdout
+  пайпы, из UI можно писать в сессию и читать вывод.
+- **Задача** — crew: Go-бэкенд запускает python-runner (crewai), агенты
+  выполняют задачу через инструмент `aider` и пишут отчёты. В параллельном
+  режиме координатор сначала пишет общий план в `AGENTS_PLAN.md`, затем
+  каждый агент в своём потоке делает свою секцию и складывает отчёт в
+  `status/<имя>.md`.
+- **Рабочая директория задачи** задаётся при создании и работает как
+  песочница: aider запускается с `--subtree-only`, при остановке задачи
+  убивается всё дерево процессов (Windows Job Object / process group на unix).
+- События (логи, мысли, статусы, результат) идут JSONL из раннера в бэкенд,
+  оттуда по SSE в UI; история хранится кольцевым буфером.
+
+## Стек
+
+Backend: Go (gin, SSE, os/exec). Frontend: Vue 3 + TypeScript, Tailwind CSS.
+Runner: Python 3.10+, crewai, aider. Тесты: go test, vitest.
+
+## Запуск (dev)
+
+Нужны Go 1.25+, Node 20+, Python 3.10+, `aider` в PATH
+(`pip install aider-chat`) и `pip install crewai crewai-tools`.
+
+```bash
+# backend
+cd backend
+cp .env.example .env
+go run .                    # http://localhost:8080
+
+# frontend (proxy /api -> :8080)
+cd frontend
+npm install
+npm run dev                 # http://localhost:5173
+```
+
+Прод: `npm run build` во frontend, собранный `dist/` Go-сервер раздаёт как SPA.
+
+## Конфиг
+
+Через переменные окружения, полный список с описанием — в `backend/.env.example`:
+`ADDR`, `DATA_DIR`, `STATIC_DIR`, `AIDER_BIN`, `PYTHON_BIN`, `RUNNER_PATH`,
+`ALLOW_CORS`, `TRUSTED_PROXIES`, `LOG_TAIL`, `GIN_MODE`.
+
+Ключи провайдеров (`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, ...) держать только
+в `backend/.env` или окружении сервера, в git не коммитить. aider читает ключи
+из своего конфига, crewai — из переменных окружения бэкенда.
+
+## Тесты
+
+```bash
+cd backend && go vet ./... && go test ./...
+cd frontend && npm run typecheck && npm test
+python -m compileall -q runner
+```
+
+## Лицензия
+
+MIT, см. [LICENSE](LICENSE).
