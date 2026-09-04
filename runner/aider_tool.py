@@ -62,6 +62,8 @@ class AiderTool(BaseTool):
             "--no-check-update",
             # песочница: aider не трогает файлы вне поддерева workdir
             "--subtree-only",
+            # crew не должен ходить в веб — это триггерит скачивание pandoc
+            "--no-detect-urls",
             "--message",
             prompt,
         ]

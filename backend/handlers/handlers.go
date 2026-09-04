@@ -127,6 +127,7 @@ type agentReq struct {
 	Role      string            `json:"role"`
 	Goal      string            `json:"goal"`
 	Backstory string            `json:"backstory"`
+	Perms     *store.Perms      `json:"perms"`
 }
 
 var winAbsRe = regexp.MustCompile(`^[A-Za-z]:[\\/]`)
@@ -176,6 +177,7 @@ func agentView(a *store.Agent, running bool) gin.H {
 		"id": a.ID, "name": a.Name, "workdir": a.WorkDir, "model": a.Model,
 		"flags": a.Flags, "env": a.Env, "role": a.Role, "goal": a.Goal,
 		"backstory": a.Backstory, "created_at": a.CreatedAt,
+		"perms":  a.EffectivePerms(),
 		"status": map[bool]string{true: "running", false: "stopped"}[running],
 	}
 }
@@ -212,7 +214,7 @@ func (s *Server) createAgent(c *gin.Context) {
 	a := &store.Agent{
 		ID: store.NewID(), Name: req.Name, WorkDir: req.WorkDir, Model: req.Model,
 		Flags: req.Flags, Env: req.Env, Role: req.Role, Goal: req.Goal,
-		Backstory: req.Backstory, CreatedAt: time.Now().UTC(),
+		Backstory: req.Backstory, Perms: req.Perms, CreatedAt: time.Now().UTC(),
 	}
 	if err := s.store.CreateAgent(a); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
@@ -244,6 +246,7 @@ func (s *Server) updateAgent(c *gin.Context) {
 	a.Name, a.WorkDir, a.Model = req.Name, req.WorkDir, req.Model
 	a.Flags, a.Env = req.Flags, req.Env
 	a.Role, a.Goal, a.Backstory = req.Role, req.Goal, req.Backstory
+	a.Perms = req.Perms
 	if err := s.store.UpdateAgent(a); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 		return

@@ -13,6 +13,16 @@ import (
 	"time"
 )
 
+// Perms — права агента на деструктивные и внешние действия aider.
+type Perms struct {
+	AutoYes     bool `json:"auto_yes"`     // молча отвечать "y" на все вопросы aider (установка pandoc, add файлов и т.п.)
+	AutoCommits bool `json:"auto_commits"` // aider сам делает git-коммиты
+	DetectURLs  bool `json:"detect_urls"`  // переходить по ссылкам из чата (тянет pandoc/playwright)
+}
+
+// DefaultPerms — поведение для агентов без явных прав.
+func DefaultPerms() Perms { return Perms{AutoYes: true, AutoCommits: true, DetectURLs: false} }
+
 // Agent — конфигурация управляемого агента (aider-сессия + роль в crew).
 type Agent struct {
 	ID        string            `json:"id"`
@@ -24,7 +34,15 @@ type Agent struct {
 	Role      string            `json:"role,omitempty"`
 	Goal      string            `json:"goal,omitempty"`
 	Backstory string            `json:"backstory,omitempty"`
+	Perms     *Perms            `json:"perms,omitempty"`
 	CreatedAt time.Time         `json:"created_at"`
+}
+
+func (a *Agent) EffectivePerms() Perms {
+	if a.Perms == nil {
+		return DefaultPerms()
+	}
+	return *a.Perms
 }
 
 type TaskStatus string

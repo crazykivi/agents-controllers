@@ -98,6 +98,25 @@ func envPairs(m map[string]string) []string {
 	return out
 }
 
+// argsFor собирает аргументы aider согласно правам агента.
+func argsFor(a *store.Agent) []string {
+	p := a.EffectivePerms()
+	args := []string{"--no-check-update", "--subtree-only"}
+	if p.AutoYes {
+		args = append(args, "--yes-always")
+	}
+	if p.AutoCommits {
+		args = append(args, "--auto-commits")
+	} else {
+		args = append(args, "--no-auto-commits")
+	}
+	// detect-urls — главный триггер самостоятельных скачиваний (pandoc и т.п.)
+	if !p.DetectURLs {
+		args = append(args, "--no-detect-urls")
+	}
+	return args
+}
+
 // StartAgent запускает интерактивную сессию aider в рабочей папке агента.
 func (s *Supervisor) StartAgent(a *store.Agent) error {
 	s.mu.Lock()
@@ -111,7 +130,7 @@ func (s *Supervisor) StartAgent(a *store.Agent) error {
 		return fmt.Errorf("workdir %q is not accessible", a.WorkDir)
 	}
 
-	args := []string{"--no-check-update", "--subtree-only", "--yes-always"}
+	args := argsFor(a)
 	args = append(args, a.Flags...)
 
 	cmd := exec.Command(s.cfg.AiderBin, args...)
