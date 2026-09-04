@@ -1,0 +1,33 @@
+# aider (на всякий случай)
+.aider*
+
+# CI/CD пока не используется
+.github/
+
+# секреты и локальный конфиг
+.env
+backend/.env
+
+# артефакты сборки
+dist/
+node_modules/
+coverage/
+backend/server.exe
+backend/server
+
+# данные рантайма (агенты, задачи, кэш логов)
+data/
+backend/data/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# IDE / OS
+.idea/
+.vscode/
+*.log
+Thumbs.db
+
+*.db*
