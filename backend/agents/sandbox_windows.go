@@ -4,7 +4,6 @@ package agents
 
 import (
 	"os/exec"
-	"reflect"
 	"syscall"
 	"unsafe"
 )
@@ -20,12 +19,15 @@ var (
 	procCreateJobObjectW         = kernel32.NewProc("CreateJobObjectW")
 	procSetInformationJobObject  = kernel32.NewProc("SetInformationJobObject")
 	procAssignProcessToJobObject = kernel32.NewProc("AssignProcessToJobObject")
+	procOpenProcess              = kernel32.NewProc("OpenProcess")
 	procCloseHandle              = kernel32.NewProc("CloseHandle")
 )
 
 const (
 	jobObjectExtendedLimitInformationClass = 9
 	jobObjectLimitKillOnJobClose           = 0x00002000
+	processTerminate                       = 0x0001
+	processSetQuota                        = 0x0100
 )
 
 type ioCounters struct {
@@ -58,21 +60,15 @@ type jobExtendedLimitInformation struct {
 	PeakJobMemoryUsed       uintptr
 }
 
-// processHandle достаёт unexported-хэндл из os.Process (публичного доступа нет).
-func processHandle(cmd *exec.Cmd) uintptr {
+// attachJobObject создаёт job с kill-on-close и назначает ему процесс.
+// Хэндл процесса открывается по PID (права TERMINATE|SET_QUOTA) — os.Process
+// не отдаёт свой хэндл наружу, а трогать его внутренности через reflect
+// ненадёжно. Возвращает 0, если создать/назначить job не удалось
+// (fallback на Process.Kill).
+func attachJobObject(cmd *exec.Cmd) jobObject {
 	if cmd.Process == nil {
 		return 0
 	}
-	v := reflect.ValueOf(cmd.Process).Elem().FieldByName("handle")
-	if !v.IsValid() {
-		return 0
-	}
-	return uintptr(v.Uint())
-}
-
-// attachJobObject создаёт job с kill-on-close и назначает ему процесс.
-// Возвращает 0, если создать/назначить job не удалось (fallback на Process.Kill).
-func attachJobObject(cmd *exec.Cmd) jobObject {
 	h, _, _ := procCreateJobObjectW.Call(0, 0)
 	if h == 0 {
 		return 0
@@ -89,7 +85,14 @@ func attachJobObject(cmd *exec.Cmd) jobObject {
 		_, _, _ = procCloseHandle.Call(h)
 		return 0
 	}
-	if r1, _, _ = procAssignProcessToJobObject.Call(h, processHandle(cmd)); r1 == 0 {
+	ph, _, _ := procOpenProcess.Call(processTerminate|processSetQuota, 0, uintptr(cmd.Process.Pid))
+	if ph == 0 {
+		_, _, _ = procCloseHandle.Call(h)
+		return 0
+	}
+	r1, _, _ = procAssignProcessToJobObject.Call(h, ph)
+	_, _, _ = procCloseHandle.Call(ph) // процесс остаётся в job после закрытия хэндла
+	if r1 == 0 {
 		_, _, _ = procCloseHandle.Call(h)
 		return 0
 	}
