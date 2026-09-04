@@ -68,12 +68,45 @@ const shown = computed(() =>
 )
 
 const running = computed(() => task.value?.status === 'running')
+const awaiting = computed(() => task.value?.status === 'awaiting_approval')
 
 async function cancel(): Promise<void> {
   if (!task.value) return
   try {
     await api.cancelTask(task.value.id)
     await load()
+  } catch (e) {
+    push((e as Error).message, 'error')
+  }
+}
+
+async function approve(approve: boolean): Promise<void> {
+  if (!task.value) return
+  try {
+    task.value = await api.approveTask(task.value.id, approve)
+    push(approve ? 'план подтверждён — агенты работают' : 'задача отклонена')
+  } catch (e) {
+    push((e as Error).message, 'error')
+  }
+}
+
+async function restart(): Promise<void> {
+  if (!task.value) return
+  try {
+    const nt = await api.restartTask(task.value.id)
+    push('создана копия задачи')
+    router.push({ name: 'task', params: { id: nt.id } })
+  } catch (e) {
+    push((e as Error).message, 'error')
+  }
+}
+
+async function removeTask(): Promise<void> {
+  if (!task.value) return
+  if (!confirm(`Удалить задачу «${task.value.title}»? История и логи будут потеряны.`)) return
+  try {
+    await api.deleteTask(task.value.id)
+    router.push('/tasks')
   } catch (e) {
     push((e as Error).message, 'error')
   }
@@ -119,6 +152,10 @@ function goBack(): void {
       </span>
       <span class="font-mono text-[11px] text-vsc-muted">{{ fmtDuration(task.started_at, task.finished_at) }}</span>
       <div class="ml-auto flex items-center gap-1.5">
+        <template v-if="awaiting">
+          <button class="btn-primary !py-0.5" @click="approve(true)">Подтвердить план</button>
+          <button class="btn-danger !py-0.5" @click="approve(false)">Отклонить</button>
+        </template>
         <button
           v-if="task.base_sha"
           class="btn-secondary !py-0.5"
@@ -129,7 +166,35 @@ function goBack(): void {
           <VsIcon name="refresh" :size="12" />
           Откат
         </button>
+        <button
+          class="grid h-6 w-6 place-items-center rounded text-vsc-muted hover:bg-vsc-btn2 hover:text-vsc-text"
+          :disabled="running || awaiting"
+          title="Перезапустить копией"
+          @click="restart"
+        >
+          <VsIcon name="refresh" :size="14" />
+        </button>
+        <button
+          class="grid h-6 w-6 place-items-center rounded text-vsc-muted hover:bg-vsc-red hover:text-white disabled:opacity-40"
+          :disabled="running || awaiting"
+          title="Удалить задачу"
+          @click="removeTask"
+        >
+          <VsIcon name="trash" :size="14" />
+        </button>
         <button v-if="running" class="btn-danger !py-0.5" @click="cancel">Отменить</button>
+      </div>
+    </div>
+
+    <div
+      v-if="awaiting"
+      class="flex shrink-0 items-center gap-3 border-b border-vsc-border bg-vsc-btn2 px-4 py-2 text-[12px]"
+    >
+      <VsIcon name="x" :size="13" class="text-vsc-yellow" />
+      <span class="font-medium">Координатор составил план и ждёт подтверждения</span>
+      <div class="ml-auto flex gap-1.5">
+        <button class="btn-primary !py-0.5" @click="approve(true)">Подтвердить и запустить</button>
+        <button class="btn-danger !py-0.5" @click="approve(false)">Отклонить</button>
       </div>
     </div>
 

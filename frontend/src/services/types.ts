@@ -31,7 +31,13 @@ export interface AgentInput {
   perms: AgentPerms
 }
 
-export type TaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'canceled'
+export type TaskStatus =
+  | 'pending'
+  | 'running'
+  | 'awaiting_approval'
+  | 'done'
+  | 'failed'
+  | 'canceled'
 
 export type TaskMode = 'sequential' | 'parallel'
 
@@ -43,6 +49,8 @@ export interface Task {
   mode?: TaskMode
   workdir?: string
   shared_dir?: string
+  confirm_plan?: boolean
+  depends_on?: string[]
   base_dir?: string
   base_sha?: string
   status: TaskStatus
@@ -71,6 +79,22 @@ export interface TaskInput {
   mode: TaskMode
   workdir: string
   shared_dir: string
+  confirm_plan: boolean
+  depends_on: string[]
+}
+
+export interface TaskTemplate {
+  id: string
+  name: string
+  title: string
+  description: string
+  agent_ids: string[]
+  mode?: TaskMode
+  workdir?: string
+  shared_dir?: string
+  confirm_plan?: boolean
+  depends_on?: string[]
+  created_at: string
 }
 
 export type EventKind = 'log' | 'thought' | 'status' | 'result' | 'error' | 'input' | 'plan'

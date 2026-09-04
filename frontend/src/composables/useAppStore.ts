@@ -8,7 +8,11 @@ const loaded = ref(false)
 
 const runningAgents = computed(() => agents.value.filter((a) => a.status === 'running').length)
 const activeTasks = computed(
-  () => tasks.value.filter((t) => t.status === 'running' || t.status === 'pending').length,
+  () =>
+    tasks.value.filter(
+      (t) =>
+        t.status === 'running' || t.status === 'pending' || t.status === 'awaiting_approval',
+    ).length,
 )
 
 function agentName(id: string): string {

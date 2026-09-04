@@ -404,6 +404,7 @@ watch(tabMenu, (m) => {
                 :class="{
                   'bg-vsc-green animate-pulse': t.status === 'running',
                   'bg-vsc-yellow': t.status === 'pending',
+                  'bg-vsc-cyan animate-pulse': t.status === 'awaiting_approval',
                   'bg-vsc-red': t.status === 'failed',
                   'bg-vsc-gray': t.status === 'done' || t.status === 'canceled',
                 }"

@@ -8,6 +8,7 @@ const CLASSES: Record<string, string> = {
   done: 'bg-vsc-green',
   stopped: 'bg-vsc-gray',
   pending: 'bg-vsc-yellow',
+  awaiting_approval: 'bg-vsc-cyan animate-pulse',
   failed: 'bg-vsc-red',
   canceled: 'bg-vsc-gray',
 }

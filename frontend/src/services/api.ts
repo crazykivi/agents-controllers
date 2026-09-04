@@ -1,4 +1,15 @@
-import type { Agent, AgentInput, Approval, GitStatus, Health, LogEvent, Rule, Task, TaskInput } from './types'
+import type {
+  Agent,
+  AgentInput,
+  Approval,
+  GitStatus,
+  Health,
+  LogEvent,
+  Rule,
+  Task,
+  TaskInput,
+  TaskTemplate,
+} from './types'
 
 const BASE: string = import.meta.env.VITE_API_BASE ?? ''
 
@@ -56,7 +67,11 @@ export const api = {
   getTask: (id: string) => req<Task>(`/api/tasks/${id}`),
   createTask: (t: TaskInput) =>
     req<Task>('/api/tasks', { method: 'POST', body: JSON.stringify(t) }),
+  deleteTask: (id: string) => req<{ ok: boolean }>(`/api/tasks/${id}`, { method: 'DELETE' }),
   cancelTask: (id: string) => req<Task>(`/api/tasks/${id}/cancel`, { method: 'POST' }),
+  approveTask: (id: string, approve: boolean) =>
+    req<Task>(`/api/tasks/${id}/approve`, { method: 'POST', body: JSON.stringify({ approve }) }),
+  restartTask: (id: string) => req<Task>(`/api/tasks/${id}/restart`, { method: 'POST' }),
   taskLogs: (id: string, tail = 1000) =>
     req<LogEvent[] | null>(`/api/tasks/${id}/logs?tail=${tail}`).then(arr),
   taskGitStatus: (id: string) => req<GitStatus>(`/api/tasks/${id}/git/status`),
@@ -71,4 +86,28 @@ export const api = {
   addRule: (pattern: string, action: 'allow' | 'deny') =>
     req<Rule>('/api/rules', { method: 'POST', body: JSON.stringify({ pattern, action }) }),
   deleteRule: (id: string) => req<{ ok: boolean }>(`/api/rules/${id}`, { method: 'DELETE' }),
+
+  listTemplates: () => req<TaskTemplate[] | null>('/api/templates').then(arr),
+  saveTemplate: (name: string, taskID: string) =>
+    req<TaskTemplate>('/api/templates', {
+      method: 'POST',
+      body: JSON.stringify({ name, task_id: taskID }),
+    }),
+  createTemplateFromForm: (
+    name: string,
+    payload: {
+      title: string
+      description: string
+      agent_ids: string[]
+      mode: TaskInput['mode']
+      workdir: string
+      shared_dir: string
+      confirm_plan: boolean
+    },
+  ) =>
+    req<TaskTemplate>('/api/templates', {
+      method: 'POST',
+      body: JSON.stringify({ name, payload }),
+    }),
+  deleteTemplate: (id: string) => req<{ ok: boolean }>(`/api/templates/${id}`, { method: 'DELETE' }),
 }
