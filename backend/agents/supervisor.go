@@ -319,6 +319,7 @@ type CrewSpec struct {
 		ID          string `json:"id"`
 		Title       string `json:"title"`
 		Description string `json:"description"`
+		ConfirmPlan bool   `json:"confirm_plan,omitempty"`
 	} `json:"task"`
 	AiderBin  string          `json:"aider_bin"`
 	Mode      string          `json:"mode"`
@@ -345,6 +346,7 @@ func (s *Supervisor) StartTask(t *store.Task, ags []*store.Agent) error {
 		spec.Mode = "sequential"
 	}
 	spec.Task.ID, spec.Task.Title, spec.Task.Description = t.ID, t.Title, t.Description
+	spec.Task.ConfirmPlan = t.ConfirmPlan
 	for _, a := range ags {
 		// Песочница задачи: если задана, все агенты работают только в ней,
 		// их собственные воркдиректории игнорируются.
@@ -398,9 +400,14 @@ func (s *Supervisor) StartTask(t *store.Task, ags []*store.Agent) error {
 		_ = cmd.Process.Kill()
 		return fmt.Errorf("write spec: %w", err)
 	}
-	_ = stdin.Close()
 
 	p := &proc{cmd: cmd, done: make(chan struct{})}
+	if t.ConfirmPlan {
+		// dry-run: stdin остаётся открытым — туда уйдёт approve/reject по плану
+		p.stdin = stdin
+	} else {
+		_ = stdin.Close()
+	}
 	p.job = attachJobObject(cmd)
 	s.mu.Lock()
 	s.tasks[t.ID] = p
@@ -447,8 +454,77 @@ func (s *Supervisor) StartTask(t *store.Task, ags []*store.Agent) error {
 		}
 		s.publish("crew", t.ID, "crew", kind, string(status))
 		close(p.done)
+		s.kickQueue()
 	}()
 	return nil
+}
+
+// kickQueue — после завершения задачи запускает (или проваливает)
+// отложенные задачи, чьи зависимости разрешены.
+func (s *Supervisor) kickQueue() {
+	for _, t := range s.store.ListTasks() {
+		if t.Status != store.TaskPending || len(t.DependsOn) == 0 {
+			continue
+		}
+		ready, blocked := true, ""
+		for _, dep := range t.DependsOn {
+			d, err := s.store.GetTask(dep)
+			if err != nil {
+				blocked = dep
+				break
+			}
+			switch d.Status {
+			case store.TaskDone:
+				// зависимость выполнена
+			case store.TaskPending, store.TaskRunning, store.TaskAwaiting:
+				ready = false
+			default: // failed | canceled
+				blocked = dep
+			}
+			if blocked != "" {
+				break
+			}
+		}
+		if blocked != "" {
+			now := time.Now().UTC()
+			_ = s.store.UpdateTask(t.ID, func(tt *store.Task) error {
+				tt.Status = store.TaskFailed
+				tt.Error = "зависимость " + blocked + " не выполнена"
+				tt.FinishedAt = &now
+				return nil
+			})
+			s.publish("crew", t.ID, "crew", "error", "задача отменена: зависимость "+blocked+" не выполнена")
+			continue
+		}
+		if !ready {
+			continue
+		}
+		ags := make([]*store.Agent, 0, len(t.AgentIDs))
+		for _, id := range t.AgentIDs {
+			if a, err := s.store.GetAgent(id); err == nil {
+				ags = append(ags, a)
+			}
+		}
+		if len(ags) != len(t.AgentIDs) {
+			now := time.Now().UTC()
+			_ = s.store.UpdateTask(t.ID, func(tt *store.Task) error {
+				tt.Status = store.TaskFailed
+				tt.Error = "не найдены агенты задачи"
+				tt.FinishedAt = &now
+				return nil
+			})
+			continue
+		}
+		if err := s.StartTask(t, ags); err != nil {
+			now := time.Now().UTC()
+			_ = s.store.UpdateTask(t.ID, func(tt *store.Task) error {
+				tt.Status = store.TaskFailed
+				tt.Error = err.Error()
+				tt.FinishedAt = &now
+				return nil
+			})
+		}
+	}
 }
 
 func (s *Supervisor) pumpCrew(taskID string, r io.Reader) {
@@ -467,6 +543,18 @@ func (s *Supervisor) pumpCrew(taskID string, r io.Reader) {
 		if err := json.Unmarshal([]byte(line), &ev); err != nil || ev.Kind == "" {
 			s.publish("crew", taskID, "crew", "log", StripANSI(line))
 			continue
+		}
+		if ev.Kind == "plan" {
+			// dry-run: координатор выдал план — задача ждёт подтверждения
+			if t, err := s.store.GetTask(taskID); err == nil && t.ConfirmPlan {
+				_ = s.store.UpdateTask(taskID, func(tt *store.Task) error {
+					tt.Status = store.TaskAwaiting
+					return nil
+				})
+				s.publish("crew", taskID, "crew", "status", "план составлен — требуется подтверждение")
+				s.publish("crew", taskID, ev.Agent, "plan", ev.Text)
+				continue
+			}
 		}
 		if ev.Kind == "result" {
 			_ = s.store.UpdateTask(taskID, func(tt *store.Task) error {
@@ -489,8 +577,34 @@ func (s *Supervisor) CancelTask(id string) error {
 	if p == nil {
 		return fmt.Errorf("task is not running")
 	}
+	if p.stdin != nil {
+		_, _ = p.stdin.Write([]byte("reject\n")) // dry-run: вежливое отклонение плана
+	}
 	_ = p.cmd.Process.Kill()
 	p.killTree()
+	return nil
+}
+
+// ApprovePlan отправляет решение по плану dry-run задачи в stdin runner'а.
+func (s *Supervisor) ApprovePlan(id string, approve bool) error {
+	s.mu.Lock()
+	p := s.tasks[id]
+	s.mu.Unlock()
+	if p == nil || p.stdin == nil {
+		return fmt.Errorf("task is not waiting for approval")
+	}
+	ans := "reject"
+	if approve {
+		ans = "approve"
+	}
+	if _, err := p.stdin.Write([]byte(ans + "\n")); err != nil {
+		return fmt.Errorf("write decision: %w", err)
+	}
+	decision := "отклонён"
+	if approve {
+		decision = "подтверждён"
+	}
+	s.publish("crew", id, "crew", "status", "план "+decision+" человеком")
 	return nil
 }
 

@@ -77,11 +77,18 @@ func NewRouter(cfg config.Config, st *store.Store, sup *agents.Supervisor, hub *
 		api.GET("/tasks", s.listTasks)
 		api.POST("/tasks", limiter.Strict(), s.createTask)
 		api.GET("/tasks/:id", s.getTask)
+		api.DELETE("/tasks/:id", s.deleteTask)
 		api.POST("/tasks/:id/cancel", limiter.Strict(), s.cancelTask)
+		api.POST("/tasks/:id/approve", limiter.Strict(), s.approveTask)
+		api.POST("/tasks/:id/restart", limiter.Strict(), s.restartTask)
 		api.GET("/tasks/:id/logs", s.taskLogs)
 		api.GET("/tasks/:id/git/status", s.taskGitStatus)
 		api.GET("/tasks/:id/git/diff", s.taskGitDiff)
 		api.POST("/tasks/:id/git/rollback", limiter.Strict(), s.taskGitRollback)
+
+		api.GET("/templates", s.listTemplates)
+		api.POST("/templates", limiter.Strict(), s.createTemplate)
+		api.DELETE("/templates/:id", s.deleteTemplate)
 	}
 	s.mountStatic(r)
 	return r
@@ -527,6 +534,8 @@ type taskReq struct {
 	Mode        string   `json:"mode"`
 	WorkDir     string   `json:"workdir"`
 	SharedDir   string   `json:"shared_dir"`
+	ConfirmPlan bool     `json:"confirm_plan"`
+	DependsOn   []string `json:"depends_on"`
 }
 
 func (s *Server) listTasks(c *gin.Context) {
@@ -599,13 +608,50 @@ func (s *Server) createTask(c *gin.Context) {
 			shared = ags[0].WorkDir
 		}
 	}
+	// dry-run без плана не бывает: план пишет только параллельный координатор
+	confirmPlan := req.ConfirmPlan && mode == "parallel"
+	// зависимости: существующие задачи, отличные от себя
+	queued := false
+	seenDeps := map[string]bool{}
+	for _, dep := range req.DependsOn {
+		if dep == "" || seenDeps[dep] {
+			continue
+		}
+		seenDeps[dep] = true
+		d, err := s.store.GetTask(dep)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "неизвестная задача-зависимость: " + dep})
+			return
+		}
+		switch d.Status {
+		case store.TaskPending, store.TaskRunning, store.TaskAwaiting:
+			queued = true
+		case store.TaskFailed, store.TaskCanceled:
+			c.JSON(http.StatusBadRequest, gin.H{"error": "зависимость " + dep + " провалена — запуск бессмыслен"})
+			return
+		}
+	}
+	newID := store.NewID()
+	for dep := range seenDeps {
+		if dep == newID {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "задача не может зависеть от самой себя"})
+			return
+		}
+	}
 	t := &store.Task{
-		ID: store.NewID(), Title: req.Title, Description: req.Description,
+		ID: newID, Title: req.Title, Description: req.Description,
 		AgentIDs: req.AgentIDs, Mode: mode, WorkDir: workdir, SharedDir: shared,
+		ConfirmPlan: confirmPlan, DependsOn: req.DependsOn,
 		Status: store.TaskPending, CreatedAt: time.Now().UTC(),
 	}
 	if err := s.store.CreateTask(t); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if queued {
+		// запустится kickQueue'ем, когда зависимости разрешатся
+		t, _ = s.store.GetTask(t.ID)
+		c.JSON(http.StatusCreated, t)
 		return
 	}
 	if err := s.sup.StartTask(t, ags); err != nil {
@@ -642,6 +688,162 @@ func (s *Server) taskLogs(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, s.hub.History(events.Key("crew", c.Param("id")), s.tailParam(c)))
+}
+
+func (s *Server) deleteTask(c *gin.Context) {
+	t, err := s.store.GetTask(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if t.Status == store.TaskRunning || t.Status == store.TaskAwaiting {
+		c.JSON(http.StatusConflict, gin.H{"error": "остановите задачу перед удалением"})
+		return
+	}
+	// задача не должна быть чьей-то зависимостью
+	for _, x := range s.store.ListTasks() {
+		if x.ID == t.ID {
+			continue
+		}
+		for _, dep := range x.DependsOn {
+			if dep == t.ID && (x.Status == store.TaskPending) {
+				c.JSON(http.StatusConflict, gin.H{"error": "задача является зависимостью " + x.ID + " — сначала удалите её"})
+				return
+			}
+		}
+	}
+	if err := s.store.DeleteTask(t.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// restartTask запускает копию завершённой задачи (снимок её конфигурации).
+func (s *Server) restartTask(c *gin.Context) {
+	t, err := s.store.GetTask(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	ags := make([]*store.Agent, 0, len(t.AgentIDs))
+	for _, id := range t.AgentIDs {
+		a, err := s.store.GetAgent(id)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "агент недоступен: " + id})
+			return
+		}
+		ags = append(ags, a)
+	}
+	nt := &store.Task{
+		ID: store.NewID(), Title: t.Title, Description: t.Description,
+		AgentIDs: t.AgentIDs, Mode: t.Mode, WorkDir: t.WorkDir, SharedDir: t.SharedDir,
+		ConfirmPlan: t.ConfirmPlan, DependsOn: nil,
+		Status: store.TaskPending, CreatedAt: time.Now().UTC(),
+	}
+	if err := s.store.CreateTask(nt); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if err := s.sup.StartTask(nt, ags); err != nil {
+		_ = s.store.UpdateTask(nt.ID, func(tt *store.Task) error {
+			tt.Status = store.TaskFailed
+			tt.Error = err.Error()
+			return nil
+		})
+		nt, _ = s.store.GetTask(nt.ID)
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "task": nt})
+		return
+	}
+	nt, _ = s.store.GetTask(nt.ID)
+	c.JSON(http.StatusCreated, nt)
+}
+
+func (s *Server) approveTask(c *gin.Context) {
+	t, err := s.store.GetTask(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if t.Status != store.TaskAwaiting {
+		c.JSON(http.StatusConflict, gin.H{"error": "задача не ждёт подтверждения плана"})
+		return
+	}
+	var req struct {
+		Approve bool `json:"approve"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	if err := s.sup.ApprovePlan(t.ID, req.Approve); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	_ = s.store.UpdateTask(t.ID, func(tt *store.Task) error {
+		tt.Status = store.TaskRunning
+		return nil
+	})
+	t, _ = s.store.GetTask(t.ID)
+	c.JSON(http.StatusOK, t)
+}
+
+// --- templates handlers ---
+
+func (s *Server) listTemplates(c *gin.Context) {
+	c.JSON(http.StatusOK, s.store.ListTemplates())
+}
+
+func (s *Server) createTemplate(c *gin.Context) {
+	var req struct {
+		Name    string  `json:"name"`
+		TaskID  *string `json:"task_id"`
+		Payload *struct {
+			Title       string   `json:"title"`
+			Description string   `json:"description"`
+			AgentIDs    []string `json:"agent_ids"`
+			Mode        string   `json:"mode"`
+			WorkDir     string   `json:"workdir"`
+			SharedDir   string   `json:"shared_dir"`
+			ConfirmPlan bool     `json:"confirm_plan"`
+		} `json:"payload"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	tpl := &store.Template{ID: store.NewID(), Name: req.Name, CreatedAt: time.Now().UTC()}
+	if req.TaskID != nil && *req.TaskID != "" {
+		t, err := s.store.GetTask(*req.TaskID)
+		if err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
+			return
+		}
+		tpl.Title, tpl.Description, tpl.AgentIDs = t.Title, t.Description, t.AgentIDs
+		tpl.Mode, tpl.WorkDir, tpl.SharedDir = t.Mode, t.WorkDir, t.SharedDir
+		tpl.ConfirmPlan = t.ConfirmPlan
+	} else if req.Payload != nil {
+		p := req.Payload
+		tpl.Title, tpl.Description, tpl.AgentIDs = p.Title, p.Description, p.AgentIDs
+		tpl.Mode, tpl.WorkDir, tpl.SharedDir = p.Mode, p.WorkDir, p.SharedDir
+		tpl.ConfirmPlan = p.ConfirmPlan
+	} else {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "нужен task_id или payload"})
+		return
+	}
+	if err := s.store.CreateTemplate(tpl); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, tpl)
+}
+
+func (s *Server) deleteTemplate(c *gin.Context) {
+	if err := s.store.DeleteTemplate(c.Param("id")); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // --- SSE ---
