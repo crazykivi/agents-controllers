@@ -46,6 +46,8 @@ type Task struct {
 	Mode        string     `json:"mode,omitempty"` // sequential | parallel
 	WorkDir     string     `json:"workdir,omitempty"` // песочница задачи: если задана, ВСЕ агенты работают только в ней
 	SharedDir   string     `json:"shared_dir,omitempty"`
+	BaseDir     string     `json:"base_dir,omitempty"` // где сделан git-снапшот
+	BaseSHA     string     `json:"base_sha,omitempty"` // HEAD на момент старта задачи
 	Status      TaskStatus `json:"status"`
 	Result      string     `json:"result,omitempty"`
 	Error       string     `json:"error,omitempty"`

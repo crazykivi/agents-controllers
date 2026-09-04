@@ -15,6 +15,7 @@ import (
 	"agents-controllers/backend/agents"
 	"agents-controllers/backend/config"
 	"agents-controllers/backend/events"
+	"agents-controllers/backend/gitcmd"
 	"agents-controllers/backend/middleware"
 	"agents-controllers/backend/store"
 	"github.com/gin-gonic/gin"
@@ -62,12 +63,18 @@ func NewRouter(cfg config.Config, st *store.Store, sup *agents.Supervisor, hub *
 		api.POST("/agents/:id/stop", s.stopAgent)
 		api.POST("/agents/:id/input", limiter.Strict(), s.agentInput)
 		api.GET("/agents/:id/logs", s.agentLogs)
+		api.GET("/agents/:id/git/status", s.agentGitStatus)
+		api.GET("/agents/:id/git/diff", s.agentGitDiff)
+		api.POST("/agents/:id/git/undo", limiter.Strict(), s.agentGitUndo)
 
 		api.GET("/tasks", s.listTasks)
 		api.POST("/tasks", limiter.Strict(), s.createTask)
 		api.GET("/tasks/:id", s.getTask)
 		api.POST("/tasks/:id/cancel", limiter.Strict(), s.cancelTask)
 		api.GET("/tasks/:id/logs", s.taskLogs)
+		api.GET("/tasks/:id/git/status", s.taskGitStatus)
+		api.GET("/tasks/:id/git/diff", s.taskGitDiff)
+		api.POST("/tasks/:id/git/rollback", limiter.Strict(), s.taskGitRollback)
 	}
 	s.mountStatic(r)
 	return r
@@ -326,6 +333,121 @@ func (s *Server) agentLogs(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, s.hub.History(events.Key("agent", c.Param("id")), s.tailParam(c)))
+}
+
+// --- git handlers ---
+
+const maxDiffBytes = 256 * 1024
+
+func truncateDiff(d string) string {
+	if len(d) > maxDiffBytes {
+		return d[:maxDiffBytes] + "\n… (обрезано)"
+	}
+	return d
+}
+
+func gitView(dir string) (bool, string, []gitcmd.FileChange) {
+	if dir == "" || !gitcmd.IsRepo(dir) {
+		return false, "", []gitcmd.FileChange{}
+	}
+	branch, _ := gitcmd.Branch(dir)
+	files, err := gitcmd.Status(dir)
+	if err != nil {
+		files = []gitcmd.FileChange{}
+	}
+	return true, branch, files
+}
+
+func (s *Server) agentGitStatus(c *gin.Context) {
+	a, err := s.store.GetAgent(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	repo, branch, files := gitView(a.WorkDir)
+	c.JSON(http.StatusOK, gin.H{"repo": repo, "branch": branch, "changes": files})
+}
+
+func (s *Server) agentGitDiff(c *gin.Context) {
+	a, err := s.store.GetAgent(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if !gitcmd.IsRepo(a.WorkDir) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "workdir is not a git repository"})
+		return
+	}
+	d, err := gitcmd.Diff(a.WorkDir, "")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"diff": truncateDiff(d)})
+}
+
+func (s *Server) agentGitUndo(c *gin.Context) {
+	a, err := s.store.GetAgent(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if err := s.sup.SendInput(a.ID, a.Name, "/undo"); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (s *Server) taskGitStatus(c *gin.Context) {
+	t, err := s.store.GetTask(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	repo, branch, files := gitView(t.BaseDir)
+	c.JSON(http.StatusOK, gin.H{"repo": repo, "branch": branch, "changes": files})
+}
+
+func (s *Server) taskGitDiff(c *gin.Context) {
+	t, err := s.store.GetTask(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if t.BaseDir == "" || !gitcmd.IsRepo(t.BaseDir) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "git snapshot is not available for this task"})
+		return
+	}
+	d, err := gitcmd.Diff(t.BaseDir, t.BaseSHA)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"diff": truncateDiff(d)})
+}
+
+func (s *Server) taskGitRollback(c *gin.Context) {
+	t, err := s.store.GetTask(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if t.Status == store.TaskRunning {
+		c.JSON(http.StatusConflict, gin.H{"error": "остановите задачу перед откатом"})
+		return
+	}
+	if t.BaseDir == "" || t.BaseSHA == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "git snapshot is not available for this task"})
+		return
+	}
+	if err := gitcmd.Reset(t.BaseDir, t.BaseSHA); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	s.sup.TaskNote(t.ID, "git: рабочий каталог откачен к снапшоту "+t.BaseSHA)
+	t, _ = s.store.GetTask(t.ID)
+	c.JSON(http.StatusOK, t)
 }
 
 // --- tasks handlers ---

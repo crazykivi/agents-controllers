@@ -14,6 +14,7 @@ import (
 
 	"agents-controllers/backend/config"
 	"agents-controllers/backend/events"
+	"agents-controllers/backend/gitcmd"
 	"agents-controllers/backend/store"
 )
 
@@ -21,11 +22,6 @@ var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]`)
 
 // StripANSI убирает escape-коды терминала из вывода дочерних процессов.
 func StripANSI(s string) string { return ansiRe.ReplaceAllString(s, "") }
-
-// aider читает stdin в режиме pipe (prompt_toolkit деградирует до plain input).
-// Флаг --hard-redirects есть в новых версиях aider — его можно добавить через Flags агента.
-// --subtree-only не даёт aider трогать файлы вне поддерева рабочей директории.
-var defaultAiderArgs = []string{"--yes-always", "--no-check-update", "--subtree-only"}
 
 type proc struct {
 	cmd      *exec.Cmd
@@ -89,6 +85,11 @@ func (s *Supervisor) SendSystem(ref, text string) {
 	s.publish("system", ref, "system", "status", text)
 }
 
+// TaskNote публикует служебную заметку в поток задачи (откаты, снапшоты).
+func (s *Supervisor) TaskNote(taskID, text string) {
+	s.publish("crew", taskID, "crew", "status", text)
+}
+
 func envPairs(m map[string]string) []string {
 	out := make([]string, 0, len(m))
 	for k, v := range m {
@@ -110,11 +111,8 @@ func (s *Supervisor) StartAgent(a *store.Agent) error {
 		return fmt.Errorf("workdir %q is not accessible", a.WorkDir)
 	}
 
-	args := append([]string{}, defaultAiderArgs...)
+	args := []string{"--no-check-update", "--subtree-only", "--yes-always"}
 	args = append(args, a.Flags...)
-	if a.Model != "" {
-		args = append(args, "--model", a.Model)
-	}
 
 	cmd := exec.Command(s.cfg.AiderBin, args...)
 	applyProcAttrs(cmd)
@@ -268,6 +266,20 @@ func (s *Supervisor) StartTask(t *store.Task, ags []*store.Agent) error {
 			WorkDir: workdir, Model: a.Model, AiderFlags: a.Flags,
 		})
 	}
+
+	// Git-снапшот: если песочница — репозиторий, запоминаем HEAD для
+	// последующего просмотра диффов и отката.
+	baseDir := ""
+	baseSHA := ""
+	snapDir := t.SharedDir
+	if snapDir == "" && len(spec.Agents) > 0 {
+		snapDir = spec.Agents[0].WorkDir
+	}
+	if snapDir != "" && gitcmd.IsRepo(snapDir) && gitcmd.HasCommits(snapDir) {
+		if sha, err := gitcmd.HeadSHA(snapDir); err == nil {
+			baseDir, baseSHA = snapDir, sha
+		}
+	}
 	specJSON, err := json.Marshal(spec)
 	if err != nil {
 		return err
@@ -306,6 +318,7 @@ func (s *Supervisor) StartTask(t *store.Task, ags []*store.Agent) error {
 		now := time.Now().UTC()
 		tt.Status = store.TaskRunning
 		tt.StartedAt = &now
+		tt.BaseDir, tt.BaseSHA = baseDir, baseSHA
 		return nil
 	})
 	s.publish("crew", t.ID, "crew", "status", "started")
