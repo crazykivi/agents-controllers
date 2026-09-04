@@ -67,6 +67,13 @@ func NewRouter(cfg config.Config, st *store.Store, sup *agents.Supervisor, hub *
 		api.GET("/agents/:id/git/diff", s.agentGitDiff)
 		api.POST("/agents/:id/git/undo", limiter.Strict(), s.agentGitUndo)
 
+		api.GET("/approvals", s.listApprovals)
+		api.POST("/approvals/:id", limiter.Strict(), s.resolveApproval)
+
+		api.GET("/rules", s.listRules)
+		api.POST("/rules", limiter.Strict(), s.addRule)
+		api.DELETE("/rules/:id", s.deleteRule)
+
 		api.GET("/tasks", s.listTasks)
 		api.POST("/tasks", limiter.Strict(), s.createTask)
 		api.GET("/tasks/:id", s.getTask)
@@ -451,6 +458,64 @@ func (s *Server) taskGitRollback(c *gin.Context) {
 	s.sup.TaskNote(t.ID, "git: рабочий каталог откачен к снапшоту "+t.BaseSHA)
 	t, _ = s.store.GetTask(t.ID)
 	c.JSON(http.StatusOK, t)
+}
+
+// --- approvals / rules ---
+
+func (s *Server) listApprovals(c *gin.Context) {
+	aps := s.sup.PendingApprovals()
+	out := make([]gin.H, 0, len(aps))
+	for _, ap := range aps {
+		out = append(out, gin.H{
+			"id": ap.ID, "agent_id": ap.AgentID, "agent_name": ap.AgentName,
+			"text": ap.Text, "ts": ap.TS,
+		})
+	}
+	c.JSON(http.StatusOK, out)
+}
+
+func (s *Server) resolveApproval(c *gin.Context) {
+	var req struct {
+		Action string `json:"action"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || (req.Action != "allow" && req.Action != "deny") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "action must be allow or deny"})
+		return
+	}
+	if err := s.sup.ResolveApproval(c.Param("id"), req.Action); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (s *Server) listRules(c *gin.Context) {
+	c.JSON(http.StatusOK, s.store.ListRules())
+}
+
+func (s *Server) addRule(c *gin.Context) {
+	var req struct {
+		Pattern string `json:"pattern"`
+		Action  string `json:"action"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid body"})
+		return
+	}
+	r, err := s.store.AddRule(req.Pattern, req.Action)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, r)
+}
+
+func (s *Server) deleteRule(c *gin.Context) {
+	if err := s.store.DeleteRule(c.Param("id")); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // --- tasks handlers ---

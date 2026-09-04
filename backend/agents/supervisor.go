@@ -1,4 +1,4 @@
-package agents
+﻿package agents
 
 import (
 	"bufio"
@@ -37,9 +37,10 @@ type proc struct {
 // Supervisor запускает и останавливает процессы aider (по агенту)
 // и python crew-runner (по задаче), раскладывая вывод по именованным потокам событий.
 type Supervisor struct {
-	cfg   config.Config
-	store *store.Store
-	hub   *events.Hub
+	cfg       config.Config
+	store     *store.Store
+	hub       *events.Hub
+	approvals *Approvals
 
 	mu     sync.Mutex
 	agents map[string]*proc
@@ -48,11 +49,12 @@ type Supervisor struct {
 
 func NewSupervisor(cfg config.Config, st *store.Store, hub *events.Hub) *Supervisor {
 	return &Supervisor{
-		cfg:    cfg,
-		store:  st,
-		hub:    hub,
-		agents: map[string]*proc{},
-		tasks:  map[string]*proc{},
+		cfg:       cfg,
+		store:     st,
+		hub:       hub,
+		approvals: NewApprovals(),
+		agents:    map[string]*proc{},
+		tasks:     map[string]*proc{},
 	}
 }
 
@@ -165,7 +167,7 @@ func (s *Supervisor) StartAgent(a *store.Agent) error {
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); s.pump("agent", a.ID, a.Name, stdout) }()
+	go func() { defer wg.Done(); s.pumpAgent(a, stdout) }()
 	go func() { defer wg.Done(); s.pump("agent", a.ID, a.Name, stderr) }()
 	go func() {
 		wg.Wait()
@@ -194,6 +196,76 @@ func (s *Supervisor) pump(source, ref, agent string, r io.Reader) {
 		}
 		s.publish(source, ref, agent, "log", line)
 	}
+}
+
+// pumpAgent — вывод интерактивного aider: помимо логов ловим вопросы (y/n)
+// и при выключенном авто-yes заводим ожидание решения человека.
+func (s *Supervisor) pumpAgent(a *store.Agent, r io.Reader) {
+	autoYes := a.EffectivePerms().AutoYes
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for sc.Scan() {
+		line := strings.TrimRight(StripANSI(sc.Text()), " \t\r")
+		if line == "" {
+			continue
+		}
+		s.publish("agent", a.ID, a.Name, "log", line)
+		if autoYes {
+			continue
+		}
+		if q, ok := questionMatch(line); ok {
+			s.askHuman(a, q)
+		}
+	}
+}
+
+// askHuman создаёт approval: сначала авто-ответ по правилам,
+// иначе — вопрос висит в UI, пока человек не нажмёт Да/Нет.
+func (s *Supervisor) askHuman(a *store.Agent, question string) {
+	if action, ok := s.store.MatchRule(question); ok {
+		ans := "n"
+		if action == "allow" {
+			ans = "y"
+		}
+		s.publish("agent", a.ID, a.Name, "status",
+			fmt.Sprintf("автоответ (%s): %s", action, question))
+		_ = s.SendInput(a.ID, a.Name, ans)
+		return
+	}
+	ap := &Approval{
+		ID:        store.NewID(),
+		AgentID:   a.ID,
+		AgentName: a.Name,
+		Text:      question,
+		TS:        time.Now().UTC(),
+		answer:    make(chan string, 1),
+	}
+	s.approvals.add(ap)
+	s.publish("agent", a.ID, a.Name, "status", "ждёт подтверждения: "+question)
+	select {
+	case ans := <-ap.answer:
+		_ = s.SendInput(a.ID, a.Name, ans)
+	case <-time.After(approvalTimeout):
+		_ = s.SendInput(a.ID, a.Name, "n")
+		s.publish("agent", a.ID, a.Name, "status", "подтверждение истекло — отправлен отказ")
+	}
+}
+
+// PendingApprovals — вопросы, ждущие человека (для UI).
+func (s *Supervisor) PendingApprovals() []*Approval { return s.approvals.list() }
+
+// ResolveApproval отправляет решение (allow → y, deny → n) в stdin агента.
+func (s *Supervisor) ResolveApproval(id, action string) error {
+	decision := "n"
+	if action == "allow" {
+		decision = "y"
+	}
+	ap, ok := s.approvals.resolve(id, decision)
+	if !ok {
+		return fmt.Errorf("approval not found")
+	}
+	_ = ap
+	return nil
 }
 
 // SendInput пишет команду/сообщение в stdin сессии aider.

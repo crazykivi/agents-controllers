@@ -81,18 +81,22 @@ type Store struct {
 	dir    string
 	agents map[string]*Agent
 	tasks  map[string]*Task
+	rules  map[string]*Rule
 }
 
 func New(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
-	s := &Store{dir: dir, agents: map[string]*Agent{}, tasks: map[string]*Task{}}
+	s := &Store{dir: dir, agents: map[string]*Agent{}, tasks: map[string]*Task{}, rules: map[string]*Rule{}}
 	if err := s.load("agents.json", &s.agents); err != nil {
 		return nil, fmt.Errorf("load agents: %w", err)
 	}
 	if err := s.load("tasks.json", &s.tasks); err != nil {
 		return nil, fmt.Errorf("load tasks: %w", err)
+	}
+	if err := s.load("rules.json", &s.rules); err != nil {
+		return nil, fmt.Errorf("load rules: %w", err)
 	}
 	changed := false
 	for _, t := range s.tasks {
