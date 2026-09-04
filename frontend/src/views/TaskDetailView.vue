@@ -8,6 +8,7 @@ import { useEventStream } from '../composables/useEventStream'
 import { useToasts } from '../composables/useToasts'
 import { usePanelResize } from '../composables/usePanelResize'
 import LogConsole from '../components/LogConsole.vue'
+import GitPanel from '../components/GitPanel.vue'
 import StatusBadge from '../components/StatusBadge.vue'
 import VsIcon from '../components/VsIcon.vue'
 
@@ -18,14 +19,18 @@ const router = useRouter()
 const task = ref<Task | null>(null)
 const events = ref<LogEvent[]>([])
 const filter = ref<string>('all')
+const bottomView = ref<'terminal' | 'git'>('terminal')
+const gitKey = ref(0)
+const rollingBack = ref(false)
 
-// --- Перетаскиваемая панель результата (сохраняется в localStorage) ---
 const resultEl = ref<HTMLElement | null>(null)
-const { size: resultHeight, dividerProps: resultSash } = usePanelResize(
-  'task-result',
-  resultEl,
-  { min: 80, max: 600, initial: 180, side: 'end', axis: 'y' },
-)
+const { size: resultHeight, dividerProps: resultSash } = usePanelResize('task-result', resultEl, {
+  min: 80,
+  max: 600,
+  initial: 180,
+  side: 'end',
+  axis: 'y',
+})
 
 useEventStream((e) => {
   if (e.source === 'crew' && e.ref === props.id) {
@@ -48,7 +53,7 @@ onMounted(async () => {
   try {
     events.value = await api.taskLogs(props.id, 1000)
   } catch {
-    /* пусто */
+    // пусто
   }
 })
 
@@ -74,6 +79,22 @@ async function cancel(): Promise<void> {
   }
 }
 
+async function rollback(): Promise<void> {
+  if (!task.value?.base_dir || !task.value.base_sha) return
+  const short = task.value.base_sha.slice(0, 8)
+  if (!confirm(`Откатить все изменения в ${task.value.base_dir} к снапшоту ${short}? Незакоммиченные изменения будут потеряны.`)) return
+  rollingBack.value = true
+  try {
+    task.value = await api.taskRollback(task.value.id)
+    gitKey.value++
+    push(`откачено к снапшоту ${short}`)
+  } catch (e) {
+    push((e as Error).message, 'error')
+  } finally {
+    rollingBack.value = false
+  }
+}
+
 function goBack(): void {
   router.push('/tasks')
 }
@@ -81,7 +102,6 @@ function goBack(): void {
 
 <template>
   <section v-if="task" class="flex h-full flex-col">
-    <!-- Header -->
     <div class="flex shrink-0 flex-wrap items-center gap-2 border-b border-vsc-border px-4 py-2 text-[13px]">
       <button class="text-vsc-muted hover:text-vsc-text" @click="goBack">Задачи</button>
       <VsIcon name="chevron" :size="12" class="text-vsc-muted" />
@@ -98,51 +118,98 @@ function goBack(): void {
         {{ task.workdir }}
       </span>
       <span class="font-mono text-[11px] text-vsc-muted">{{ fmtDuration(task.started_at, task.finished_at) }}</span>
-      <button v-if="running" class="btn-danger ml-auto !py-0.5" @click="cancel">Отменить</button>
+      <div class="ml-auto flex items-center gap-1.5">
+        <button
+          v-if="task.base_sha"
+          class="btn-secondary !py-0.5"
+          :disabled="running || rollingBack"
+          title="Откатить рабочую копию к git-снапшоту"
+          @click="rollback"
+        >
+          <VsIcon name="refresh" :size="12" />
+          Откат
+        </button>
+        <button v-if="running" class="btn-danger !py-0.5" @click="cancel">Отменить</button>
+      </div>
     </div>
 
     <p v-if="task.error" class="shrink-0 bg-vsc-red-dim px-4 py-1.5 text-xs text-vsc-red">
       {{ task.error }}
     </p>
 
-    <!-- Agent filter tabs like editor tabs -->
-    <div class="flex shrink-0 items-stretch border-b border-vsc-border bg-vsc-chrome" role="tablist" aria-label="Фильтр по агентам">
+    <div class="flex h-9 shrink-0 items-stretch border-b border-vsc-border bg-vsc-chrome">
       <button
-        class="px-3 text-[12px]"
-        :class="filter === 'all' ? 'border-b-2 border-b-vsc-cyan text-vsc-active-text' : 'text-vsc-muted hover:text-vsc-text'"
-        @click="filter = 'all'"
+        class="px-4 text-[12px]"
+        :class="bottomView === 'terminal' ? 'border-b-2 border-b-vsc-cyan text-vsc-active-text' : 'text-vsc-muted hover:text-vsc-text'"
+        @click="bottomView = 'terminal'"
       >
-        все
+        Терминал
       </button>
       <button
-        v-for="name in agentTabs"
-        :key="name"
-        class="px-3 text-[12px]"
-        :class="filter === name ? 'border-b-2 border-b-vsc-cyan text-vsc-active-text' : 'text-vsc-muted hover:text-vsc-text'"
-        @click="filter = name"
+        class="px-4 text-[12px]"
+        :class="bottomView === 'git' ? 'border-b-2 border-b-vsc-cyan text-vsc-active-text' : 'text-vsc-muted hover:text-vsc-text'"
+        @click="bottomView = 'git'; gitKey++"
       >
-        {{ name }}
+        Git
       </button>
+      <span
+        v-if="task.base_sha"
+        class="ml-2 self-center font-mono text-[10px] text-vsc-muted"
+        title="HEAD на момент запуска задачи"
+      >
+        снапшот: {{ task.base_sha.slice(0, 8) }}
+      </span>
     </div>
 
-    <!-- Terminal -->
-    <LogConsole :events="shown" />
-
-    <!-- Result panel (resizable) -->
-    <template v-if="task.result">
+    <template v-if="bottomView === 'terminal'">
       <div
-        class="group relative z-10 h-1 w-full shrink-0 cursor-row-resize touch-none select-none"
-        v-bind="resultSash"
+        class="flex shrink-0 items-stretch border-b border-vsc-border bg-vsc-chrome"
+        role="tablist"
+        aria-label="Фильтр по агентам"
       >
-        <div class="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-vsc-border group-hover:bg-vsc-cyan" />
+        <button
+          class="px-3 text-[12px]"
+          :class="filter === 'all' ? 'border-b-2 border-b-vsc-cyan text-vsc-active-text' : 'text-vsc-muted hover:text-vsc-text'"
+          @click="filter = 'all'"
+        >
+          все
+        </button>
+        <button
+          v-for="name in agentTabs"
+          :key="name"
+          class="px-3 text-[12px]"
+          :class="filter === name ? 'border-b-2 border-b-vsc-cyan text-vsc-active-text' : 'text-vsc-muted hover:text-vsc-text'"
+          @click="filter = name"
+        >
+          {{ name }}
+        </button>
       </div>
-      <div ref="resultEl" class="shrink-0 overflow-hidden bg-vsc-term" :style="{ height: resultHeight + 'px' }">
-        <div class="scroll-thin h-full overflow-auto">
-          <div class="px-4 pt-2 text-[11px] font-semibold uppercase tracking-widest text-vsc-green">Результат</div>
-          <pre class="whitespace-pre-wrap px-4 pb-3 pt-1 font-mono text-xs text-vsc-text">{{ task.result }}</pre>
+
+      <LogConsole :events="shown" />
+
+      <template v-if="task.result">
+        <div
+          class="group relative z-10 h-1 w-full shrink-0 cursor-row-resize touch-none select-none"
+          v-bind="resultSash"
+        >
+          <div class="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-vsc-border group-hover:bg-vsc-cyan" />
         </div>
-      </div>
+        <div ref="resultEl" class="shrink-0 overflow-hidden bg-vsc-term" :style="{ height: resultHeight + 'px' }">
+          <div class="scroll-thin h-full overflow-auto">
+            <div class="px-4 pt-2 text-[11px] font-semibold uppercase tracking-widest text-vsc-green">Результат</div>
+            <pre class="whitespace-pre-wrap px-4 pb-3 pt-1 font-mono text-xs text-vsc-text">{{ task.result }}</pre>
+          </div>
+        </div>
+      </template>
     </template>
+
+    <GitPanel
+      v-else
+      class="min-h-0 flex-1"
+      :fetch-status="() => api.taskGitStatus(task!.id)"
+      :fetch-diff="() => api.taskGitDiff(task!.id)"
+      :refresh-key="gitKey"
+    />
   </section>
 
   <div v-else class="flex h-full items-center justify-center text-sm text-vsc-muted">

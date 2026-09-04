@@ -1,4 +1,4 @@
-import type { Agent, AgentInput, Health, LogEvent, Task, TaskInput } from './types'
+import type { Agent, AgentInput, GitStatus, Health, LogEvent, Task, TaskInput } from './types'
 
 const BASE: string = import.meta.env.VITE_API_BASE ?? ''
 
@@ -48,6 +48,9 @@ export const api = {
     req<{ ok: boolean }>(`/api/agents/${id}/input`, { method: 'POST', body: JSON.stringify({ text }) }),
   agentLogs: (id: string, tail = 500) =>
     req<LogEvent[] | null>(`/api/agents/${id}/logs?tail=${tail}`).then(arr),
+  agentGitStatus: (id: string) => req<GitStatus>(`/api/agents/${id}/git/status`),
+  agentGitDiff: (id: string) => req<{ diff: string }>(`/api/agents/${id}/git/diff`),
+  agentUndo: (id: string) => req<{ ok: boolean }>(`/api/agents/${id}/git/undo`, { method: 'POST' }),
 
   listTasks: () => req<Task[] | null>('/api/tasks').then(arr),
   getTask: (id: string) => req<Task>(`/api/tasks/${id}`),
@@ -56,4 +59,7 @@ export const api = {
   cancelTask: (id: string) => req<Task>(`/api/tasks/${id}/cancel`, { method: 'POST' }),
   taskLogs: (id: string, tail = 1000) =>
     req<LogEvent[] | null>(`/api/tasks/${id}/logs?tail=${tail}`).then(arr),
+  taskGitStatus: (id: string) => req<GitStatus>(`/api/tasks/${id}/git/status`),
+  taskGitDiff: (id: string) => req<{ diff: string }>(`/api/tasks/${id}/git/diff`),
+  taskRollback: (id: string) => req<Task>(`/api/tasks/${id}/git/rollback`, { method: 'POST' }),
 }
