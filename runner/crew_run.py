@@ -33,6 +33,12 @@ def read_spec() -> dict:
     return json.loads(line)
 
 
+def wait_decision() -> str:
+    """Читает решение по плану из stdin: approve | reject."""
+    line = sys.stdin.readline()
+    return line.strip().lower()
+
+
 def make_llm(model: str):
     """LLM с диагностикой вместо трейсбека pydantic при ошибке конфигурации."""
     from crewai import LLM
@@ -260,6 +266,15 @@ def run_parallel(spec: dict) -> str:
     agents = spec["agents"]
     shared_dir = spec.get("shared_dir") or agents[0]["workdir"]
     plan = generate_plan(spec, shared_dir)
+
+    # dry-run: координатор написал план — ждём подтверждения человека
+    if spec["task"].get("confirm_plan"):
+        emit("status", "crew", "план готов, ожидает подтверждения (dry-run)")
+        decision = wait_decision()
+        if decision != "approve":
+            emit("status", "crew", f"план отклонён ({decision or 'нет ответа'}) — задача остановлена")
+            sys.exit(3)
+        emit("status", "crew", "план подтверждён — запускаю агентов")
 
     results: dict = {}
     threads = []
