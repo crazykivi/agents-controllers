@@ -48,11 +48,12 @@ func (a *Agent) EffectivePerms() Perms {
 type TaskStatus string
 
 const (
-	TaskPending  TaskStatus = "pending"
-	TaskRunning  TaskStatus = "running"
-	TaskDone     TaskStatus = "done"
-	TaskFailed   TaskStatus = "failed"
-	TaskCanceled TaskStatus = "canceled"
+	TaskPending         TaskStatus = "pending"
+	TaskRunning         TaskStatus = "running"
+	TaskAwaiting        TaskStatus = "awaiting_approval"
+	TaskDone            TaskStatus = "done"
+	TaskFailed          TaskStatus = "failed"
+	TaskCanceled        TaskStatus = "canceled"
 )
 
 // Task — задача, которую выполняет crew (набор агентов через crewai runner).
@@ -64,6 +65,8 @@ type Task struct {
 	Mode        string     `json:"mode,omitempty"` // sequential | parallel
 	WorkDir     string     `json:"workdir,omitempty"` // песочница задачи: если задана, ВСЕ агенты работают только в ней
 	SharedDir   string     `json:"shared_dir,omitempty"`
+	ConfirmPlan bool       `json:"confirm_plan,omitempty"` // dry-run: ждать подтверждения плана перед выполнением
+	DependsOn   []string   `json:"depends_on,omitempty"`   // очередь: запустить, когда все эти задачи завершатся
 	BaseDir     string     `json:"base_dir,omitempty"` // где сделан git-снапшот
 	BaseSHA     string     `json:"base_sha,omitempty"` // HEAD на момент старта задачи
 	Status      TaskStatus `json:"status"`
@@ -77,18 +80,25 @@ type Task struct {
 var ErrNotFound = errors.New("not found")
 
 type Store struct {
-	mu     sync.RWMutex
-	dir    string
-	agents map[string]*Agent
-	tasks  map[string]*Task
-	rules  map[string]*Rule
+	mu        sync.RWMutex
+	dir       string
+	agents    map[string]*Agent
+	tasks     map[string]*Task
+	rules     map[string]*Rule
+	templates map[string]*Template
 }
 
 func New(dir string) (*Store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
-	s := &Store{dir: dir, agents: map[string]*Agent{}, tasks: map[string]*Task{}, rules: map[string]*Rule{}}
+	s := &Store{
+		dir:       dir,
+		agents:    map[string]*Agent{},
+		tasks:     map[string]*Task{},
+		rules:     map[string]*Rule{},
+		templates: map[string]*Template{},
+	}
 	if err := s.load("agents.json", &s.agents); err != nil {
 		return nil, fmt.Errorf("load agents: %w", err)
 	}
@@ -97,6 +107,9 @@ func New(dir string) (*Store, error) {
 	}
 	if err := s.load("rules.json", &s.rules); err != nil {
 		return nil, fmt.Errorf("load rules: %w", err)
+	}
+	if err := s.load("templates.json", &s.templates); err != nil {
+		return nil, fmt.Errorf("load templates: %w", err)
 	}
 	changed := false
 	for _, t := range s.tasks {
@@ -253,5 +266,15 @@ func (s *Store) UpdateTask(id string, fn func(*Task) error) error {
 	if err := fn(t); err != nil {
 		return err
 	}
+	return s.save("tasks.json", s.tasks)
+}
+
+func (s *Store) DeleteTask(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.tasks[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.tasks, id)
 	return s.save("tasks.json", s.tasks)
 }
