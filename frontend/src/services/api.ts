@@ -1,0 +1,59 @@
+import type { Agent, AgentInput, Health, LogEvent, Task, TaskInput } from './types'
+
+const BASE: string = import.meta.env.VITE_API_BASE ?? ''
+
+async function req<T>(path: string, init: RequestInit = {}, timeoutMs = 15000): Promise<T> {
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs)
+  try {
+    const res = await fetch(BASE + path, {
+      ...init,
+      signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) },
+    })
+    if (!res.ok) {
+      let msg = res.statusText
+      try {
+        const body = (await res.json()) as { error?: string }
+        if (body.error) msg = body.error
+      } catch {
+        /* тело не JSON — оставляем statusText */
+      }
+      throw new Error(msg)
+    }
+    if (res.status === 204) return undefined as T
+    return (await res.json()) as T
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export const eventsUrl = `${BASE}/api/events`
+
+const arr = <T>(v: T[] | null | undefined): T[] => v ?? []
+
+export const api = {
+  health: () => req<Health>('/api/health', {}, 5000),
+
+  listAgents: () => req<Agent[] | null>('/api/agents').then(arr),
+  getAgent: (id: string) => req<Agent>(`/api/agents/${id}`),
+  createAgent: (a: AgentInput) =>
+    req<Agent>('/api/agents', { method: 'POST', body: JSON.stringify(a) }),
+  updateAgent: (id: string, a: AgentInput) =>
+    req<Agent>(`/api/agents/${id}`, { method: 'PUT', body: JSON.stringify(a) }),
+  deleteAgent: (id: string) => req<{ ok: boolean }>(`/api/agents/${id}`, { method: 'DELETE' }),
+  startAgent: (id: string) => req<Agent>(`/api/agents/${id}/start`, { method: 'POST' }),
+  stopAgent: (id: string) => req<{ ok: boolean }>(`/api/agents/${id}/stop`, { method: 'POST' }),
+  sendInput: (id: string, text: string) =>
+    req<{ ok: boolean }>(`/api/agents/${id}/input`, { method: 'POST', body: JSON.stringify({ text }) }),
+  agentLogs: (id: string, tail = 500) =>
+    req<LogEvent[] | null>(`/api/agents/${id}/logs?tail=${tail}`).then(arr),
+
+  listTasks: () => req<Task[] | null>('/api/tasks').then(arr),
+  getTask: (id: string) => req<Task>(`/api/tasks/${id}`),
+  createTask: (t: TaskInput) =>
+    req<Task>('/api/tasks', { method: 'POST', body: JSON.stringify(t) }),
+  cancelTask: (id: string) => req<Task>(`/api/tasks/${id}/cancel`, { method: 'POST' }),
+  taskLogs: (id: string, tail = 1000) =>
+    req<LogEvent[] | null>(`/api/tasks/${id}/logs?tail=${tail}`).then(arr),
+}

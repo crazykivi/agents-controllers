@@ -1,0 +1,140 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------- VS Code Dark+ (default) ---------- */
+:root {
+  --vsc-bg: #1e1e1e;
+  --vsc-chrome: #323233;
+  --vsc-side: #252526;
+  --vsc-activity: #333333;
+  --vsc-border: #2b2b2b;
+  --vsc-text: #cccccc;
+  --vsc-muted: #8b8b8b;
+  --vsc-accent: #0e639c;
+  --vsc-accent-hover: #1177bb;
+  --vsc-accent-text: #ffffff;
+  --vsc-hover: #2a2d2e;
+  --vsc-active: #37373d;
+  --vsc-active-text: #ffffff;
+  --vsc-input: #3c3c3c;
+  --vsc-input-border: #3c3c3c;
+  --vsc-btn: #0e639c;
+  --vsc-btn-hover: #1177bb;
+  --vsc-btn2: #3a3d41;
+  --vsc-btn2-hover: #45494e;
+  --vsc-status: #007acc;
+  --vsc-status-hover: #1f8ad2;
+  --vsc-term: #181818;
+  --vsc-green: #4ec9b0;
+  --vsc-yellow: #dcdcaa;
+  --vsc-red: #f48771;
+  --vsc-orange: #ce9178;
+  --vsc-gray: #808080;
+  --vsc-cyan: #4fc1ff;
+  --vsc-violet: #c586c0;
+  --vsc-blue: #569cd6;
+  --vsc-amber: #d7ba7d;
+  --vsc-cyan-dim: rgba(79, 193, 255, 0.15);
+  --vsc-red-dim: rgba(244, 135, 113, 0.12);
+}
+
+/* ---------- Light theme ---------- */
+.light {
+  --vsc-bg: #ffffff;
+  --vsc-chrome: #dddddd;
+  --vsc-side: #f3f3f3;
+  --vsc-activity: #2c2c2c;
+  --vsc-border: #e5e5e5;
+  --vsc-text: #3b3b3b;
+  --vsc-muted: #767676;
+  --vsc-accent: #005fb8;
+  --vsc-accent-hover: #0258a8;
+  --vsc-accent-text: #ffffff;
+  --vsc-hover: #e8e8e8;
+  --vsc-active: #e4e6f1;
+  --vsc-active-text: #1b1b1b;
+  --vsc-input: #ffffff;
+  --vsc-input-border: #cecece;
+  --vsc-btn: #005fb8;
+  --vsc-btn-hover: #0258a8;
+  --vsc-btn2: #e4e4e4;
+  --vsc-btn2-hover: #d8d8d8;
+  --vsc-status: #005fb8;
+  --vsc-status-hover: #1a71af;
+  --vsc-term: #f5f5f5;
+  --vsc-green: #098658;
+  --vsc-yellow: #bf8803;
+  --vsc-red: #e51400;
+  --vsc-orange: #a31515;
+  --vsc-gray: #717171;
+  --vsc-cyan: #007acc;
+  --vsc-violet: #af00db;
+  --vsc-blue: #0000ff;
+  --vsc-amber: #8f6c00;
+  --vsc-cyan-dim: rgba(0, 122, 204, 0.12);
+  --vsc-red-dim: rgba(229, 20, 0, 0.1);
+}
+
+@layer base {
+  html,
+  body,
+  #app {
+    height: 100%;
+    overflow: hidden;
+  }
+  body {
+    @apply bg-vsc-bg font-sans text-[13px] text-vsc-text antialiased;
+  }
+  ::selection {
+    background: #264f78;
+    color: inherit;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1 text-[13px] leading-5 transition-colors disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .btn-primary {
+    @apply btn bg-vsc-btn text-vsc-accent-text hover:bg-vsc-btn-hover;
+  }
+  .btn-secondary {
+    @apply btn bg-vsc-btn2 text-vsc-text hover:bg-vsc-btn2-hover;
+  }
+  .btn-ghost {
+    @apply btn text-vsc-text hover:bg-vsc-hover;
+  }
+  .btn-danger {
+    @apply btn bg-vsc-red text-white hover:brightness-110;
+  }
+  .input {
+    @apply w-full border border-vsc-input-border bg-vsc-input px-2 py-1 text-[13px] text-vsc-text outline-none focus:border-vsc-cyan;
+  }
+  .checkbox {
+    @apply h-3.5 w-3.5 cursor-pointer accent-vsc-cyan;
+  }
+  .label {
+    @apply mb-0.5 block text-[11px] uppercase tracking-wide text-vsc-muted;
+  }
+  .panel-title {
+    @apply px-5 py-2 text-[11px] font-semibold uppercase tracking-widest text-vsc-muted;
+  }
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(121, 121, 121, 0.4) transparent;
+  }
+  .scroll-thin::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  .scroll-thin::-webkit-scrollbar-thumb {
+    background: rgba(121, 121, 121, 0.4);
+  }
+  .scroll-thin::-webkit-scrollbar-thumb:hover {
+    background: rgba(121, 121, 121, 0.7);
+  }
+  .scroll-thin::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+}
