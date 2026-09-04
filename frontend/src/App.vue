@@ -7,6 +7,7 @@ import { useToasts } from './composables/useToasts'
 import { useAppStore } from './composables/useAppStore'
 import { useEditorTabs } from './composables/useEditorTabs'
 import { usePanelResize } from './composables/usePanelResize'
+import { useApprovals } from './composables/useApprovals'
 import VsIcon from './components/VsIcon.vue'
 
 const { theme, cycle, label } = useTheme()
@@ -14,6 +15,21 @@ const { toasts } = useToasts()
 const store = useAppStore()
 const route = useRoute()
 const router = useRouter()
+const { pending: approvals, resolve: resolveApproval } = useApprovals()
+
+const approvalsOpen = ref(true)
+const resolving = ref<string | null>(null)
+
+async function decide(id: string, action: 'allow' | 'deny'): Promise<void> {
+  resolving.value = id
+  try {
+    await resolveApproval(id, action)
+  } catch {
+    /* панель обновится при следующем опросе */
+  } finally {
+    resolving.value = null
+  }
+}
 
 const online = ref(true)
 let ping: ReturnType<typeof setInterval> | null = null
@@ -78,8 +94,13 @@ const editorTabs = useEditorTabs()
 const baseTabs = computed(() =>
   editorTabs.base.map((to) => ({
     to,
-    title: to === '/' ? 'Агенты' : 'Задачи',
-    icon: to === '/' ? 'agents' : 'tasks',
+    title:
+      to === '/'
+        ? 'Агенты'
+        : to === '/tasks'
+          ? 'Задачи'
+          : 'Настройки',
+    icon: to === '/' ? 'agents' : to === '/tasks' ? 'tasks' : 'gear',
   })),
 )
 
@@ -314,11 +335,12 @@ watch(tabMenu, (m) => {
         </button>
         <div class="mt-auto">
           <RouterLink
-            to="/tasks"
+            to="/settings"
             class="grid h-12 w-12 place-items-center text-vsc-muted hover:text-vsc-text"
-            aria-label="Новая задача"
+            :class="route.path === '/settings' && 'text-vsc-active-text'"
+            aria-label="Настройки"
           >
-            <VsIcon name="plus" :size="22" />
+            <VsIcon name="gear" :size="22" />
           </RouterLink>
         </div>
       </nav>
@@ -500,6 +522,50 @@ watch(tabMenu, (m) => {
       </div>
     </div>
 
+    <!-- Approvals panel (IDE-style bottom notifications) -->
+    <div
+      v-if="approvals.length"
+      class="shrink-0 border-t border-vsc-border bg-vsc-side"
+    >
+      <button
+        class="flex w-full items-center gap-2 px-4 py-1 text-left text-[11px] font-semibold uppercase tracking-widest text-vsc-muted hover:bg-vsc-hover"
+        @click="approvalsOpen = !approvalsOpen"
+      >
+        <VsIcon name="chevron" :size="11" :class="approvalsOpen ? '' : '-rotate-90'" />
+        Требуют подтверждения ({{ approvals.length }})
+      </button>
+      <div v-if="approvalsOpen" class="max-h-44 overflow-y-auto scroll-thin">
+        <div
+          v-for="ap in approvals"
+          :key="ap.id"
+          class="flex items-center gap-3 border-t border-vsc-border px-4 py-2"
+        >
+          <VsIcon name="x" :size="13" class="shrink-0 text-vsc-yellow" />
+          <RouterLink
+            :to="`/agents/${ap.agent_id}`"
+            class="shrink-0 font-mono text-[11px] text-vsc-cyan hover:underline"
+          >
+            {{ ap.agent_name }}
+          </RouterLink>
+          <span class="min-w-0 flex-1 truncate text-[12px] text-vsc-text" :title="ap.text">{{ ap.text }}</span>
+          <button
+            class="btn-primary !py-0.5 !px-3 text-xs"
+            :disabled="resolving === ap.id"
+            @click="decide(ap.id, 'allow')"
+          >
+            Разрешить
+          </button>
+          <button
+            class="btn-secondary !py-0.5 !px-3 text-xs"
+            :disabled="resolving === ap.id"
+            @click="decide(ap.id, 'deny')"
+          >
+            Отклонить
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- Status bar -->
     <footer class="flex h-6 shrink-0 items-center gap-4 bg-vsc-status px-3 text-[11px] text-vsc-accent-text">
       <button
@@ -519,6 +585,15 @@ watch(tabMenu, (m) => {
       <button class="flex items-center gap-1.5 rounded px-1 hover:bg-vsc-status-hover" @click="onActivity('tasks')">
         <VsIcon name="tasks" :size="12" />
         задачи: {{ store.activeTasks.value }}/{{ store.tasks.value.length }}
+      </button>
+      <button
+        v-if="approvals.length"
+        class="flex items-center gap-1.5 rounded bg-vsc-yellow px-1.5 font-semibold text-black hover:brightness-110"
+        title="Есть вопросы, требующие решения"
+        @click="approvalsOpen = !approvalsOpen"
+      >
+        <VsIcon name="x" :size="11" />
+        {{ approvals.length }}
       </button>
       <button class="ml-auto rounded px-1 hover:bg-vsc-status-hover" @click="cycle">
         тема: {{ label() }}

@@ -92,3 +92,18 @@ export interface Health {
   tasks: number
   event_drops: number
 }
+
+export interface Approval {
+  id: string
+  agent_id: string
+  agent_name: string
+  text: string
+  ts: string
+}
+
+export interface Rule {
+  id: string
+  pattern: string
+  action: 'allow' | 'deny'
+  created_at: string
+}

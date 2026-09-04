@@ -1,4 +1,4 @@
-import type { Agent, AgentInput, GitStatus, Health, LogEvent, Task, TaskInput } from './types'
+import type { Agent, AgentInput, Approval, GitStatus, Health, LogEvent, Rule, Task, TaskInput } from './types'
 
 const BASE: string = import.meta.env.VITE_API_BASE ?? ''
 
@@ -62,4 +62,13 @@ export const api = {
   taskGitStatus: (id: string) => req<GitStatus>(`/api/tasks/${id}/git/status`),
   taskGitDiff: (id: string) => req<{ diff: string }>(`/api/tasks/${id}/git/diff`),
   taskRollback: (id: string) => req<Task>(`/api/tasks/${id}/git/rollback`, { method: 'POST' }),
+
+  listApprovals: () => req<Approval[] | null>('/api/approvals').then(arr),
+  resolveApproval: (id: string, action: 'allow' | 'deny') =>
+    req<{ ok: boolean }>(`/api/approvals/${id}`, { method: 'POST', body: JSON.stringify({ action }) }),
+
+  listRules: () => req<Rule[] | null>('/api/rules').then(arr),
+  addRule: (pattern: string, action: 'allow' | 'deny') =>
+    req<Rule>('/api/rules', { method: 'POST', body: JSON.stringify({ pattern, action }) }),
+  deleteRule: (id: string) => req<{ ok: boolean }>(`/api/rules/${id}`, { method: 'DELETE' }),
 }

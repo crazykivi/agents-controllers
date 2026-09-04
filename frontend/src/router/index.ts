@@ -17,6 +17,7 @@ const router = createRouter({
       component: () => import('../views/TaskDetailView.vue'),
       props: true,
     },
+    { path: '/settings', name: 'settings', component: () => import('../views/SettingsView.vue') },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
   scrollBehavior: () => ({ top: 0 }),
