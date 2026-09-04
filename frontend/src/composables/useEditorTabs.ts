@@ -14,7 +14,7 @@ interface Stored {
 }
 
 const TAB_RE = /^\/(agents|tasks)\/[A-Za-z0-9]+$/
-const BASE = ['/', '/tasks']
+const BASE = ['/', '/tasks', '/settings']
 
 function load(): Stored {
   try {
@@ -23,7 +23,9 @@ function load(): Stored {
       const v = JSON.parse(raw) as Stored
       if (Array.isArray(v.tabs) && Array.isArray(v.pinned)) {
         const base =
-          Array.isArray(v.base) && v.base.length === 2 && BASE.every((b) => v.base.includes(b))
+          Array.isArray(v.base) &&
+          BASE.every((b) => v.base.includes(b)) &&
+          v.base.every((b) => BASE.includes(b))
             ? [...v.base]
             : [...BASE]
         const pinned = v.pinned.filter((t) => typeof t === 'string' && TAB_RE.test(t))
