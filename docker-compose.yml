@@ -1,0 +1,18 @@
+services:
+  app:
+    build: .
+    container_name: ${COMPOSE_PROJECT_NAME:-agents-controllers}
+    ports:
+      - "${APP_PORT:-8080}:8080"
+    env_file:
+      - .env
+    environment:
+      GIN_MODE: release
+    volumes:
+      - agents-data:/app/data
+      # примонтируйте рабочие папки агентов, чтобы aider мог их править:
+      # - /path/to/repos:/repos
+    restart: unless-stopped
+
+volumes:
+  agents-data:
