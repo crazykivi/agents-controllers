@@ -2,7 +2,7 @@
 import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../services/api'
-import type { Agent, AgentInput } from '../services/types'
+import type { Agent, AgentInput, AgentPerms } from '../services/types'
 import { useToasts } from '../composables/useToasts'
 import { useAppStore } from '../composables/useAppStore'
 import StatusBadge from '../components/StatusBadge.vue'
@@ -30,6 +30,8 @@ onMounted(() => {
   void load()
 })
 
+const defaultPerms = (): AgentPerms => ({ auto_yes: true, auto_commits: true, detect_urls: false })
+
 const emptyForm = (): AgentInput & { flagsText: string } => ({
   name: '',
   workdir: '',
@@ -39,6 +41,7 @@ const emptyForm = (): AgentInput & { flagsText: string } => ({
   role: '',
   goal: '',
   backstory: '',
+  perms: defaultPerms(),
   flagsText: '',
 })
 
@@ -56,6 +59,11 @@ function fillForm(a: Agent): void {
     role: a.role ?? '',
     goal: a.goal ?? '',
     backstory: a.backstory ?? '',
+    perms: {
+      auto_yes: a.perms?.auto_yes ?? true,
+      auto_commits: a.perms?.auto_commits ?? true,
+      detect_urls: a.perms?.detect_urls ?? false,
+    },
     flagsText: (a.flags ?? []).join(' '),
   })
 }
@@ -89,7 +97,7 @@ async function save(): Promise<void> {
   }
   try {
     const isEdit = !!editingId.value
-    if (isEdit) await api.updateAgent(editingId.value, payload)
+    if (isEdit && editingId.value) await api.updateAgent(editingId.value, payload)
     else await api.createAgent(payload)
     cancelForm()
     push(isEdit ? 'агент обновлён' : 'агент создан')
@@ -176,6 +184,26 @@ async function remove(a: Agent): Promise<void> {
         <label class="label" for="f-backstory">Backstory</label>
         <textarea id="f-backstory" v-model="form.backstory" class="input" rows="2" />
       </div>
+      <fieldset class="md:col-span-2">
+        <legend class="label">Права aider</legend>
+        <div class="grid gap-1.5 text-[13px]">
+          <label class="flex cursor-pointer items-center gap-2">
+            <input v-model="form.perms.auto_yes" type="checkbox" class="checkbox" />
+            <span>Авто-подтверждение <span class="text-vsc-muted">(--yes-always: aider молча соглашается на свои вопросы; выкл = каждый вопрос надо подтвердить вручную)</span></span>
+          </label>
+          <label class="flex cursor-pointer items-center gap-2">
+            <input v-model="form.perms.auto_commits" type="checkbox" class="checkbox" />
+            <span>Автокоммиты <span class="text-vsc-muted">(--auto-commits: aider сам делает git-коммиты)</span></span>
+          </label>
+          <label class="flex cursor-pointer items-center gap-2">
+            <input v-model="form.perms.detect_urls" type="checkbox" class="checkbox" />
+            <span>Переходить по ссылкам <span class="text-vsc-muted">(--detect-urls: может качать pandoc и ходить в веб; обычно не нужно)</span></span>
+          </label>
+          <p class="text-[11px] text-vsc-muted">
+            Всегда включено: --no-check-update, --subtree-only (aider не выходит за пределы рабочей папки).
+          </p>
+        </div>
+      </fieldset>
       <div class="md:col-span-2 flex gap-2">
         <button class="btn-primary" type="submit" :disabled="saving">
           {{ saving ? 'Сохранение…' : (editingId ? 'Сохранить изменения' : 'Создать') }}

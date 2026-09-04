@@ -1,3 +1,9 @@
+export interface AgentPerms {
+  auto_yes: boolean
+  auto_commits: boolean
+  detect_urls: boolean
+}
+
 export interface Agent {
   id: string
   name: string
@@ -8,6 +14,7 @@ export interface Agent {
   role?: string
   goal?: string
   backstory?: string
+  perms?: AgentPerms | null
   created_at: string
   status: 'running' | 'stopped'
 }
@@ -21,6 +28,7 @@ export interface AgentInput {
   role: string
   goal: string
   backstory: string
+  perms: AgentPerms
 }
 
 export type TaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'canceled'
@@ -35,12 +43,25 @@ export interface Task {
   mode?: TaskMode
   workdir?: string
   shared_dir?: string
+  base_dir?: string
+  base_sha?: string
   status: TaskStatus
   result?: string
   error?: string
   created_at: string
   started_at?: string | null
   finished_at?: string | null
+}
+
+export interface GitFile {
+  path: string
+  status: string
+}
+
+export interface GitStatus {
+  repo: boolean
+  branch?: string
+  changes: GitFile[]
 }
 
 export interface TaskInput {
